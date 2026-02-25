@@ -1,0 +1,27 @@
+# ── Veri setleri (büyük dosyalar, GitHub'a yüklenmesin) ──────────────────────
+English_sms_spam/
+TurkishSMS/
+
+# ── Kod tarafından üretilen analiz çıktıları ─────────────────────────────────
+results/
+*.csv
+
+# ── Python önbelleği ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Sanal ortamlar ────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── IDE / Editör dosyaları ────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+
+# ── İşletim sistemi artıkları ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
