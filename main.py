@@ -22,7 +22,7 @@ from metrics     import build_stats, compute_gini, compute_dfs
 
 # ─── YAPILANDIRMA ─────────────────────────────────────────────────────────────
 
-TOP_N          = 20           # raporlanacak kelime sayısı
+TOP_N          = 500          # matrise dahil edilecek kelime sayısı (en sık kullanılan)
 RESULTS_DIR    = "results"    # tüm çıktı CSV dosyaları bu klasöre kaydedilir
 
 
@@ -61,10 +61,16 @@ def _next_run_number() -> int:
 
 def build_score_matrix(df: pd.DataFrame, lang_label: str) -> pd.DataFrame:
     """
-    Veri setindeki her kelime için GI ve DFS skorlarını hesaplar.
-    Gini_Score'a göre azalan sıralanmış Top-N ana matrisi döndürür.
+    Veri setinde en sık kullanılan TOP_N kelimeyi seçer,
+    bu kelimeler için GI ve DFS skorlarını hesaplar.
 
-    Döndürülen sütunlar: Kelime | Gini_Score | DFS_Score
+    Adımlar:
+      1. Tüm token'lardaki toplam kelime frekansı hesaplanır.
+      2. En yüksek frekanslı TOP_N kelime seçilir (aday kelime listesi).
+      3. Yalnızca bu kelimeler için build_stats() istatistikleri kullanılır.
+      4. Sonuç Gini_Score'a göre azalan sırada döndürülür.
+
+    Döndürülen sütunlar: Kelime | Frekans | Gini_Score | DFS_Score
 
     Parametreler
     ------------
@@ -80,35 +86,47 @@ def build_score_matrix(df: pd.DataFrame, lang_label: str) -> pd.DataFrame:
     all_terms = list(stats["term_class"].keys())
     print(f"  → Benzersiz kelime  : {len(all_terms)}")
 
+    # ── 1. Toplam kelime frekansı (tüm belgeler, binary değil ham sayı) ──
+    from collections import Counter
+    freq: Counter = Counter()
+    for tokens in df["tokens"]:
+        freq.update(tokens)
+
+    # ── 2. En sık TOP_N kelimeyi seç ────────────────────────────────────
+    top_terms = [term for term, _ in freq.most_common(TOP_N)]
+    print(f"  → En sık {TOP_N} kelime seçildi (toplam token: {sum(freq.values())})")
+
+    # ── 3. Seçili kelimeler için GI / DFS hesapla ────────────────────────
     rows = [
         {
             "Kelime":     term,
+            "Frekans":    freq[term],
             "Gini_Score": round(compute_gini(term, stats), 6),
             "DFS_Score":  round(compute_dfs(term, stats),  6),
         }
-        for term in all_terms
+        for term in top_terms
     ]
 
-    top = (
+    result = (
         pd.DataFrame(rows)
         .sort_values("Gini_Score", ascending=False)
-        .head(TOP_N)
         .reset_index(drop=True)
     )
-    top.index     += 1
-    top.index.name = "Sıra"
-    return top
+    result.index     += 1
+    result.index.name = "Sıra"
+    return result
 
 
 # ─── KARŞILAŞTIRMALI ÇIKTI ────────────────────────────────────────────────────
 
 def display_comparison(matrix: pd.DataFrame, lang_label: str) -> None:
-    """GI ve DFS sütunlarını yan yana karşılaştırmalı tablo olarak ekrana basar."""
+    """İlk 10 satırı önizleme olarak ekrana basar (tüm matris CSV'ye kaydedilir)."""
     sep = "=" * 62
     print(f"\n{sep}")
-    print(f"  {lang_label} – Top {TOP_N} Kelime | Gini  vs  DFS")
+    print(f"  {lang_label} – En Sık {TOP_N} Kelime | Gini  vs  DFS  (ilk 10 satır)")
     print(sep)
-    print(matrix.to_string())
+    print(matrix.head(10).to_string())
+    print(f"  … ({len(matrix)} satır, tamamı CSV'de)")
     print()
 
 
