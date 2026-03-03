@@ -3,100 +3,74 @@ main.py
 ───────
 Ana modül
 
-Her çalıştırmada:
-  • 'results/' klasörü yoksa oluşturulur.
-  • Bir sonraki çalıştırma numarasını (1, 2, 3 …) otomatik belirler.
-  • Çıktılar  results/1-english_analysis.csv  ve  results/1-turkish_analysis.csv
-    biçiminde kaydedilir.
+Her çalistirmada:
+  • 'results/' klasörü yoksa olusturulur.
+  • Otomatik çalistirma numarasi belirlenir.
+  • Gini/DFS skor matrisleri (en sik 500 kelime) CSV'ye kaydedilir.
+  • VOCAB_SIZES listesindeki her boyut için TF-IDF + SVM/MNB/RF deneyleri yapilir.
+  • Tüm sonuçlar tek bir 'final_comparison_results.csv' dosyasinda toplanir.
 
-Çalıştırma:
+Çalistirma:
   python main.py
 """
 
 import os
+import sys
 import glob
 import pandas as pd
+from collections import Counter
 
-from data_loader import load_english, load_turkish
-from metrics     import build_stats, compute_gini, compute_dfs
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+from data_loader  import load_english, load_turkish
+from metrics      import build_stats, compute_gini, compute_dfs
+from classifier   import prepare_data, run_vocab_experiment
+import view_results
 
 # ─── YAPILANDIRMA ─────────────────────────────────────────────────────────────
 
-TOP_N          = 500          # matrise dahil edilecek kelime sayısı (en sık kullanılan)
-RESULTS_DIR    = "results"    # tüm çıktı CSV dosyaları bu klasöre kaydedilir
+# Skor matrisi için sabit (en sik 500 kelime skorlanir)
+SCORE_TOP_N  = 500
+
+# Siniflandirma deneyleri için denenecek vocabulary boyutlari
+VOCAB_SIZES  = [500, 300, 100, 50, 30, 10]
+
+RESULTS_DIR  = "results"
 
 
 # ─── ÇALIŞMA NUMARASI ─────────────────────────────────────────────────────────
 
 def _next_run_number() -> int:
-    """
-    results/ klasöründeki mevcut dosyaların numaralarına bakarak
-    bir sonraki çalıştırma numarasını döndürür.
-
-    Örnek:
-      results/ boşsa          → 1
-      1-english… varsa        → 2
-      1-…, 2-… varsa         → 3
-
-    Döndürür
-    --------
-    int  Bir sonraki çalıştırma numarası.
-    """
-    os.makedirs(RESULTS_DIR, exist_ok=True)   # klasörü oluştur (yoksa)
-
-    # Mevcut numaraları topla
+    os.makedirs(RESULTS_DIR, exist_ok=True)
     existing = glob.glob(os.path.join(RESULTS_DIR, "*.csv"))
     nums = set()
     for path in existing:
         base = os.path.basename(path)
-        # Beklenen biçim: "<N>-*.csv"
         part = base.split("-", 1)[0]
         if part.isdigit():
             nums.add(int(part))
-
     return max(nums) + 1 if nums else 1
 
 
-# ─── ANALİZ: SKORLAMA + ANA MATRİS ───────────────────────────────────────────
+# ─── SKOR MATRİSİ ─────────────────────────────────────────────────────────────
 
 def build_score_matrix(df: pd.DataFrame, lang_label: str) -> pd.DataFrame:
     """
-    Veri setinde en sık kullanılan TOP_N kelimeyi seçer,
-    bu kelimeler için GI ve DFS skorlarını hesaplar.
-
-    Adımlar:
-      1. Tüm token'lardaki toplam kelime frekansı hesaplanır.
-      2. En yüksek frekanslı TOP_N kelime seçilir (aday kelime listesi).
-      3. Yalnızca bu kelimeler için build_stats() istatistikleri kullanılır.
-      4. Sonuç Gini_Score'a göre azalan sırada döndürülür.
-
+    En sik kullanilan SCORE_TOP_N kelime için Gini ve DFS skorlarini hesaplar.
     Döndürülen sütunlar: Kelime | Frekans | Gini_Score | DFS_Score
-
-    Parametreler
-    ------------
-    df         : pd.DataFrame  'label' ve 'tokens' sütunları.
-    lang_label : str           Ekran çıktısı için dil etiketi.
-
-    Döndürür
-    --------
-    pd.DataFrame
     """
-    print(f"  [{lang_label}] İstatistikler hesaplanıyor…")
+    print(f"  [{lang_label}] Istatistikler hesaplaniyor...")
     stats     = build_stats(df)
     all_terms = list(stats["term_class"].keys())
     print(f"  → Benzersiz kelime  : {len(all_terms)}")
 
-    # ── 1. Toplam kelime frekansı (tüm belgeler, binary değil ham sayı) ──
-    from collections import Counter
     freq: Counter = Counter()
     for tokens in df["tokens"]:
         freq.update(tokens)
 
-    # ── 2. En sık TOP_N kelimeyi seç ────────────────────────────────────
-    top_terms = [term for term, _ in freq.most_common(TOP_N)]
-    print(f"  → En sık {TOP_N} kelime seçildi (toplam token: {sum(freq.values())})")
+    top_terms = [term for term, _ in freq.most_common(SCORE_TOP_N)]
+    print(f"  → En sik {SCORE_TOP_N} kelime secildi (toplam token: {sum(freq.values())})")
 
-    # ── 3. Seçili kelimeler için GI / DFS hesapla ────────────────────────
     rows = [
         {
             "Kelime":     term,
@@ -113,79 +87,139 @@ def build_score_matrix(df: pd.DataFrame, lang_label: str) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     result.index     += 1
-    result.index.name = "Sıra"
+    result.index.name = "Sira"
     return result
 
 
-# ─── KARŞILAŞTIRMALI ÇIKTI ────────────────────────────────────────────────────
-
 def display_comparison(matrix: pd.DataFrame, lang_label: str) -> None:
-    """İlk 10 satırı önizleme olarak ekrana basar (tüm matris CSV'ye kaydedilir)."""
+    """İlk 10 satiri önizleme olarak ekrana basar."""
     sep = "=" * 62
     print(f"\n{sep}")
-    print(f"  {lang_label} – En Sık {TOP_N} Kelime | Gini  vs  DFS  (ilk 10 satır)")
+    print(f"  {lang_label} – En Sik {SCORE_TOP_N} Kelime | Gini vs DFS (ilk 10)")
     print(sep)
     print(matrix.head(10).to_string())
-    print(f"  … ({len(matrix)} satır, tamamı CSV'de)")
-    print()
+    print(f"  ... ({len(matrix)} satir, tamami CSV'de)\n")
 
 
 def save(matrix: pd.DataFrame, output_path: str) -> None:
-    """Matrisi UTF-8 BOM ile CSV olarak results/ klasörüne kaydeder."""
+    """Matrisi UTF-8 BOM ile CSV olarak kaydeder."""
     matrix.to_csv(output_path, index=True, encoding="utf-8-sig")
     print(f"  ✓ Kaydedildi → {output_path}")
 
 
-# ─── PIPELINE'LAR ─────────────────────────────────────────────────────────────
+# ─── DİL PİPELINE'LARI ────────────────────────────────────────────────────────
 
-def run_english(run_no: int) -> pd.DataFrame:
-    """İngilizce SMS pipeline: yükle → skorla → göster → kaydet."""
+def run_english(run_no: int) -> list:
+    """
+    Ingilizce SMS pipeline:
+      Yukle → Skorla → CSV kaydet → Split+Train/Test CSV → Vocab döngüsü
+    Tüm deneme satirlarini döndürür.
+    """
     print(f"\n{'─' * 62}")
-    print(f"  [İngilizce SMS] okunuyor…")
+    print("  [Ingilizce SMS] okunuyor...")
     df = load_english()
     print(f"  → Toplam mesaj      : {len(df)}")
-    print(f"  → Sınıf dağılımı    :\n{df['label'].value_counts().to_string()}")
+    print(f"  → Sinif dagilimi    :\n{df['label'].value_counts().to_string()}")
 
-    matrix      = build_score_matrix(df, "İngilizce SMS")
+    # Skor matrisi (500 kelime skorlanir, CSV'ye kaydedilir)
+    matrix      = build_score_matrix(df, "Ingilizce SMS")
     output_path = os.path.join(RESULTS_DIR, f"{run_no}-english_analysis.csv")
-
-    display_comparison(matrix, "İngilizce SMS")
+    display_comparison(matrix, "Ingilizce SMS")
     save(matrix, output_path)
-    return matrix
+
+    # Train/Test bölme ve CSV kayit (1 kez)
+    train_path, test_path = prepare_data(df, "english", run_no)
+
+    # Vocab boyutlari üzerinden döngü
+    all_rows = []
+    for vocab_size in VOCAB_SIZES:
+        print(f"\n  >>> Analiz ediliyor: {vocab_size} kelime... (Ingilizce)")
+        rows = run_vocab_experiment(
+            train_path, test_path, matrix, vocab_size, "Ingilizce"
+        )
+        all_rows.extend(rows)
+
+    return all_rows
 
 
-def run_turkish(run_no: int) -> pd.DataFrame:
-    """Türkçe SMS pipeline: yükle → skorla → göster → kaydet."""
+def run_turkish(run_no: int) -> list:
+    """
+    Türkçe SMS pipeline:
+      Yukle → Skorla → CSV kaydet → Split+Train/Test CSV → Vocab döngüsü
+    Tüm deneme satirlarini döndürür.
+    """
     print(f"\n{'─' * 62}")
-    print(f"  [Türkçe SMS] os.walk ile taranıyor…")
+    print("  [Turkce SMS] os.walk ile taraniyor...")
     df = load_turkish()
     print(f"  → Toplam mesaj      : {len(df)}")
-    print(f"  → Sınıf dağılımı    :\n{df['label'].value_counts().to_string()}")
+    print(f"  → Sinif dagilimi    :\n{df['label'].value_counts().to_string()}")
 
-    matrix      = build_score_matrix(df, "Türkçe SMS")
+    # Skor matrisi
+    matrix      = build_score_matrix(df, "Turkce SMS")
     output_path = os.path.join(RESULTS_DIR, f"{run_no}-turkish_analysis.csv")
-
-    display_comparison(matrix, "Türkçe SMS")
+    display_comparison(matrix, "Turkce SMS")
     save(matrix, output_path)
-    return matrix
+
+    # Train/Test bölme ve CSV kayit (1 kez)
+    train_path, test_path = prepare_data(df, "turkish", run_no)
+
+    # Vocab boyutlari üzerinden döngü
+    all_rows = []
+    for vocab_size in VOCAB_SIZES:
+        print(f"\n  >>> Analiz ediliyor: {vocab_size} kelime... (Turkce)")
+        rows = run_vocab_experiment(
+            train_path, test_path, matrix, vocab_size, "Turkce"
+        )
+        all_rows.extend(rows)
+
+    return all_rows
 
 
 # ─── ANA GİRİŞ NOKTASI ────────────────────────────────────────────────────────
 
 def main():
-    run_no = _next_run_number()   # bu çalıştırmaya ait sıra numarası
+    run_no = _next_run_number()
 
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║   Öz Nitelik Seçimi: Gini İndeksi & DFS Analizi         ║")
-    print(f"║   Çalıştırma #{run_no:<49}║")
-    print("╚══════════════════════════════════════════════════════════╝")
+    print("=" * 62)
+    print("  Oz Nitelik Secimi: Gini Indeksi & DFS + ML Siniflandirma")
+    print(f"  Calistirma #{run_no}  |  Vocab boyutlari: {VOCAB_SIZES}")
+    print("=" * 62)
 
-    run_english(run_no)
-    run_turkish(run_no)
+    # Her iki dil için pipeline'lari çalistir, satirlari topla
+    all_rows  = run_english(run_no)
+    all_rows += run_turkish(run_no)
 
-    print("\n✅ Tüm analizler tamamlandı.")
-    print(f"   → İngilizce çıktı : {RESULTS_DIR}/{run_no}-english_analysis.csv")
-    print(f"   → Türkçe çıktı    : {RESULTS_DIR}/{run_no}-turkish_analysis.csv")
+    # ── Kümülatif final tablosunu oluştur ve kaydet ───────────────────────────
+    final_df = pd.DataFrame(all_rows, columns=[
+        "Dil", "Kelime_Sayisi", "Yontem", "Algoritma",
+        "Accuracy", "Precision", "Recall", "F1_Score",
+    ])
+
+    final_path = os.path.join(RESULTS_DIR, f"{run_no}-final_comparison_results.csv")
+    final_df.to_csv(final_path, index=False, encoding="utf-8-sig")
+
+    # ── Özet konsol çıktısı ───────────────────────────────────────────────────
+    print("\n" + "=" * 62)
+    print("  OZET – F1 Skorlari (Kelime Sayisina Gore)")
+    print("=" * 62)
+    pivot = (
+        final_df
+        .groupby(["Dil", "Kelime_Sayisi", "Yontem", "Algoritma"])["F1_Score"]
+        .first()
+        .unstack(["Yontem", "Algoritma"])
+    )
+    print(pivot.to_string())
+
+    print(f"\n✓ Tum analizler tamamlandi.")
+    print(f"  → Ingilizce analiz     : {RESULTS_DIR}/{run_no}-english_analysis.csv")
+    print(f"  → Turkce analiz        : {RESULTS_DIR}/{run_no}-turkish_analysis.csv")
+    print(f"  → Final karsilastirma  : {final_path}")
+    print(f"     ({len(final_df)} satir: "
+          f"{len(VOCAB_SIZES)} boyut x 2 dil x 3 algo x 2 yontem)")
+
+    # Analizler tamamlandiktan sonra sonuclari tarayicide ac
+    print("\nSonuclar tarayicide aciliyor...")
+    view_results.main()
 
 
 if __name__ == "__main__":
