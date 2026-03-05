@@ -221,18 +221,28 @@ def generate_html(run_no: int) -> str:
         pivot_eng_html = _final_pivot_html(df_final, "Ingilizce")
         pivot_tur_html = _final_pivot_html(df_final, "Turkce")
         flat_html      = _final_flat_html(df_final)
-        total_exp      = len(df_final)
-        best_row       = df_final.loc[df_final["F1_Score"].idxmax()]
-        best_info      = f"{best_row['Algoritma']} / {best_row['Yontem']} / {int(best_row['Kelime_Sayisi'])} kelime"
+
+        def _get_stats(df, lang=None):
+            sub = df[df["Dil"] == lang] if lang else df
+            if sub.empty: return "0", "0", "—", "—"
+            tot = str(len(sub))
+            voc = str(sub["Kelime_Sayisi"].nunique())
+            best = sub.loc[sub["F1_Score"].idxmax()]
+            f1 = f"{best['F1_Score']:.4f}"
+            inf = f"{best['Algoritma']} / {best['Yontem']} / {int(best['Kelime_Sayisi'])} kelime"
+            return tot, voc, f1, inf
+
+        tot_all, voc_all, f1_all, inf_all = _get_stats(df_final)
+        tot_eng, voc_eng, f1_eng, inf_eng = _get_stats(df_final, "Ingilizce")
+        tot_tur, voc_tur, f1_tur, inf_tur = _get_stats(df_final, "Turkce")
     else:
         pivot_eng_html = pivot_tur_html = flat_html = "<p style='color:#64748b;text-align:center;padding:40px'>final_comparison_results.csv bulunamadi.</p>"
-        total_exp = 0
-        best_info = "—"
+        tot_all = voc_all = f1_all = inf_all = "—"
+        tot_eng = voc_eng = f1_eng = inf_eng = "—"
+        tot_tur = voc_tur = f1_tur = inf_tur = "—"
 
     split_eng = _split_stats_html(train_eng, test_eng)
     split_tur = _split_stats_html(train_tur, test_tur)
-
-    best_f1_str = f"{df_final['F1_Score'].max():.4f}" if has_final else "—"
 
     html = f"""<!DOCTYPE html>
 <html lang="tr">
@@ -336,11 +346,14 @@ def generate_html(run_no: int) -> str:
 <!-- ══ FINAL KARŞILAŞTIRMA ══════════════════════════════════════════════════ -->
 <div id="panel-final" class="panel active">
 
-  <div class="stats-bar">
-    <div class="stat-card"><div class="label">Toplam Deney</div><div class="value">{total_exp}</div></div>
-    <div class="stat-card"><div class="label">Vocab Boyutlari</div><div class="value">6</div></div>
-    <div class="stat-card"><div class="label">En Yuksek F1<br><span style="font-size:.65rem;font-weight:400;color:#94a3b8">{best_info}</span></div>
-      <div class="value" style="color:#34d399">{best_f1_str}</div></div>
+  <div class="stats-bar" id="final-stats"
+       data-all-tot="{tot_all}" data-all-voc="{voc_all}" data-all-f1="{f1_all}" data-all-inf="{inf_all}"
+       data-eng-tot="{tot_eng}" data-eng-voc="{voc_eng}" data-eng-f1="{f1_eng}" data-eng-inf="{inf_eng}"
+       data-tur-tot="{tot_tur}" data-tur-voc="{voc_tur}" data-tur-f1="{f1_tur}" data-tur-inf="{inf_tur}">
+    <div class="stat-card"><div class="label">Toplam Deney</div><div class="value" id="fs-tot">{tot_all}</div></div>
+    <div class="stat-card"><div class="label">Vocab Boyutlari</div><div class="value" id="fs-voc">{voc_all}</div></div>
+    <div class="stat-card"><div class="label">En Yuksek F1<br><span style="font-size:.65rem;font-weight:400;color:#94a3b8" id="fs-inf">{inf_all}</span></div>
+      <div class="value" style="color:#34d399" id="fs-f1">{f1_all}</div></div>
     <div class="stat-card"><div class="label">Algoritmalar</div><div class="value">SVM · MNB · RF</div></div>
   </div>
 
@@ -359,10 +372,17 @@ def generate_html(run_no: int) -> str:
       <span style="margin-left:16px">— Hücreye fareyle gel: Acc + F1 detay</span>
     </div>
     <div class="lang-toggle">
-      <button class="lang-btn active" onclick="switchLang('peng',this)">🇬🇧 Ingilizce</button>
-      <button class="lang-btn"        onclick="switchLang('ptur',this)">🇹🇷 Turkce</button>
+      <button class="lang-btn active" data-key="all" onclick="switchLang('pall','all',this)">🌍 Tum Veriler</button>
+      <button class="lang-btn"        data-key="eng" onclick="switchLang('peng','eng',this)">🇬🇧 Ingilizce</button>
+      <button class="lang-btn"        data-key="tur" onclick="switchLang('ptur','tur',this)">🇹🇷 Turkce</button>
     </div>
-    <div id="lang-peng" class="lang-panel active">
+    <div id="lang-pall" class="lang-panel active">
+      <p style="color:#a5b4fc;font-size:0.85rem;margin-bottom:8px;font-weight:600">🇬🇧 Ingilizce Sonuclari</p>
+      <div class="table-wrap" style="margin-bottom:20px">{pivot_eng_html}</div>
+      <p style="color:#67e8f9;font-size:0.85rem;margin-bottom:8px;font-weight:600">🇹🇷 Turkce Sonuclari</p>
+      <div class="table-wrap">{pivot_tur_html}</div>
+    </div>
+    <div id="lang-peng" class="lang-panel">
       <div class="table-wrap">{pivot_eng_html}</div>
     </div>
     <div id="lang-ptur" class="lang-panel">
@@ -462,6 +482,15 @@ def generate_html(run_no: int) -> str:
 </div>
 
 <script>
+function updateFinalStats(key){{
+  const bar=document.getElementById('final-stats');
+  if(bar){{
+    document.getElementById('fs-tot').innerHTML=bar.getAttribute('data-'+key+'-tot')||'—';
+    document.getElementById('fs-voc').innerHTML=bar.getAttribute('data-'+key+'-voc')||'—';
+    document.getElementById('fs-f1').innerHTML=bar.getAttribute('data-'+key+'-f1')||'—';
+    document.getElementById('fs-inf').innerHTML=bar.getAttribute('data-'+key+'-inf')||'—';
+  }}
+}}
 function switchTab(id,btn){{
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
@@ -473,12 +502,19 @@ function switchSub(id,btn){{
   document.querySelectorAll('.sub-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('sub-'+id).classList.add('active');
   btn.classList.add('active');
+  if(id === 'flat'){{
+      updateFinalStats('all');
+  }} else {{
+      const b = document.querySelector('.lang-btn.active');
+      if(b) updateFinalStats(b.getAttribute('data-key'));
+  }}
 }}
-function switchLang(id,btn){{
+function switchLang(id,key,btn){{
   btn.closest('.sub-panel').querySelectorAll('.lang-panel').forEach(p=>p.classList.remove('active'));
   btn.closest('.sub-panel').querySelectorAll('.lang-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('lang-'+id).classList.add('active');
   btn.classList.add('active');
+  updateFinalStats(key);
 }}
 function filterTable(lang,q){{
   q=q.toLowerCase().trim();
