@@ -5,7 +5,7 @@ En son calistirmaya ait tüm analiz dosyalarini tarayicida gösterir.
 
 Sekmeler:
   📊 Final Karsilastirma  – final_comparison_results.csv (pivot + flat tablo)
-  🇬🇧 Ingilizce           – Gini/DFS skor tablosu
+  🇬🇧 Ingilizce          – Gini/DFS skor tablosu
   🇹🇷 Türkce              – Gini/DFS skor tablosu
   🗂  Veri Seti            – Train/Test bölünme istatistikleri
 
@@ -101,32 +101,32 @@ def _f1_to_color(val: float, vmin: float, vmax: float) -> str:
     return f"background:rgb({r},{g},{b});color:{text}"
 
 
-def _final_pivot_html(df_final: pd.DataFrame, dil: str) -> str:
-    """Belirli dil için pivot tablo (satır=Kelime_Sayisi, kolon=Algo×Yöntem)."""
-    sub = df_final[df_final["Dil"] == dil].copy()
+def _final_pivot_html(df_final: pd.DataFrame, dil: str, on_isleme: str, algos: list = ["SVM", "MNB", "Random Forest"]) -> str:
+    """Belirli dil ve ön işleme için pivot tablo (satır=Kelime_Sayisi, kolon=Algo×Yöntem)."""
+    if "On_Isleme" in df_final.columns:
+        sub = df_final[(df_final["Dil"] == dil) & (df_final["On_Isleme"] == on_isleme)].copy()
+    else:
+        sub = df_final[df_final["Dil"] == dil].copy()
+        
     if sub.empty:
-        return "<p style='color:#64748b'>Veri yok</p>"
+        return "<p style='color:#64748b;text-align:center'>Veri yok</p>"
 
     vocab_sizes = sorted(sub["Kelime_Sayisi"].unique(), reverse=True)
-    combos      = [
-        (algo, yontem)
-        for yontem in ["Gini", "DFS"]
-        for algo in ["SVM", "MNB", "Random Forest"]
-    ]
 
     vmin = sub["F1_Score"].min()
     vmax = sub["F1_Score"].max()
 
     # Başlık
+    colspan = len(algos)
     header  = "<thead>"
     header += "<tr>"
     header += "<th rowspan='2' style='text-align:center;vertical-align:middle'>Kelime<br>Sayisi</th>"
-    header += "<th colspan='3' style='text-align:center;border-left:1px solid #2d3148'>Gini Vocabulary</th>"
-    header += "<th colspan='3' style='text-align:center;border-left:2px solid #6366f1'>DFS Vocabulary</th>"
+    header += f"<th colspan='{colspan}' style='text-align:center;border-left:1px solid #2d3148'>Gini Vocabulary</th>"
+    header += f"<th colspan='{colspan}' style='text-align:center;border-left:2px solid #6366f1'>DFS Vocabulary</th>"
     header += "</tr><tr>"
     for yontem in ["Gini", "DFS"]:
         border = "border-left:1px solid #2d3148" if yontem == "Gini" else "border-left:2px solid #6366f1"
-        for algo in ["SVM", "MNB", "Random Forest"]:
+        for algo in algos:
             header += f"<th style='text-align:center;{border}'>{algo}</th>"
             border = ""
     header += "</tr></thead>"
@@ -137,7 +137,7 @@ def _final_pivot_html(df_final: pd.DataFrame, dil: str) -> str:
         body += f"<tr><td class='rank' style='font-size:.9rem;font-weight:600;color:#a5b4fc'>{vs}</td>"
         first_dfs = True
         for yontem in ["Gini", "DFS"]:
-            for algo in ["SVM", "MNB", "Random Forest"]:
+            for algo in algos:
                 mask = (sub["Kelime_Sayisi"] == vs) & (sub["Yontem"] == yontem) & (sub["Algoritma"] == algo)
                 row  = sub[mask]
                 if row.empty:
@@ -145,7 +145,10 @@ def _final_pivot_html(df_final: pd.DataFrame, dil: str) -> str:
                 else:
                     f1    = float(row["F1_Score"].iloc[0])
                     acc   = float(row["Accuracy"].iloc[0])
-                    style = _f1_to_color(f1, vmin, vmax)
+                    if abs(f1 - vmax) < 1e-6:
+                        style = "background:linear-gradient(135deg, #fbbf24, #d97706);color:#171717;font-weight:900;border:2px solid #fef08a"
+                    else:
+                        style = _f1_to_color(f1, vmin, vmax)
                     left  = "border-left:2px solid #6366f1;" if (yontem == "DFS" and first_dfs) else ""
                     first_dfs = False
                     body += (
@@ -167,12 +170,21 @@ def _final_flat_html(df_final: pd.DataFrame) -> str:
     vmax = df_final["F1_Score"].max()
 
     rows_html = ""
+    on_isleme_map_kisa = {
+        "Sadece Temel": "Küçük Harf + Noktalama + Tokenization",
+        "Sadece Stopword": "Küçük Harf + Noktalama + Tokenization + Stop Word",
+        "Sadece Stemming": "Küçük Harf + Noktalama + Tokenization + Stemming",
+        "Hepsi (Stopword+Stem)": "Küçük Harf + Noktalama + Tokenization + Stop Word + Stem"
+    }
+
     for _, row in df_final.iterrows():
         algo  = row["Algoritma"]
         color = algo_colors.get(algo, "#94a3b8")
         f1    = float(row["F1_Score"])
         bar_w = max(2, int((f1 - vmin) / (vmax - vmin + 1e-9) * 80))
         dil_text = str(row["Dil"])
+        on_isleme_ham = str(row.get("On_Isleme", "Temel"))
+        on_isleme = on_isleme_map_kisa.get(on_isleme_ham, on_isleme_ham)
         vocab_badge = (
             "<span class='badge-gini'>Gini</span>"
             if row["Yontem"] == "Gini"
@@ -180,6 +192,7 @@ def _final_flat_html(df_final: pd.DataFrame) -> str:
         )
         rows_html += (
             f"<tr>"
+            f"<td style='color:#fbbf24;font-size:0.75rem;font-weight:600;text-align:center;border-right:1px solid #2d3148'>{on_isleme}</td>"
             f"<td style='text-align:center;font-weight:600;color:#a5b4fc'>{dil_text}</td>"
             f"<td style='color:#a5b4fc;font-weight:600;text-align:center'>{int(row['Kelime_Sayisi'])}</td>"
             f"<td style='text-align:center'>{vocab_badge}</td>"
@@ -194,12 +207,46 @@ def _final_flat_html(df_final: pd.DataFrame) -> str:
     return rows_html
 
 
+# ─── Ablation Study Tablo ─────────────────────────────────────────────────────
+
+def _abl_table_html(df: pd.DataFrame) -> str:
+    """Ablation Study tablosunu oluşturur (F1-Macro skorları)."""
+    if df.empty:
+        return "<p style='color:#64748b;text-align:center;padding:20px'>Veri yok.</p>"
+    
+    numeric_df = df.select_dtypes(include=['float64', 'float32', 'int64', 'int32'])
+    vmin = numeric_df.min().min() if not numeric_df.empty else 0.0
+    vmax = numeric_df.max().max() if not numeric_df.empty else 1.0
+
+    header = "<thead><tr><th style='text-align:left;border-bottom:2px solid #2d3148'>Algoritma</th>"
+    for col in df.columns:
+        header += f"<th style='text-align:center;border-bottom:2px solid #2d3148'>{col}</th>"
+    header += "</tr></thead>"
+    
+    body = "<tbody>"
+    for index, row in df.iterrows():
+        body += f"<tr><td style='font-weight:600;color:#a5b4fc;border-right:1px solid #2d3148'>{index}</td>"
+        for col in df.columns:
+            val = row[col]
+            if pd.isna(val):
+                body += "<td style='text-align:center;color:#475569'>—</td>"
+            else:
+                f1_val = float(val)
+                style = _f1_to_color(f1_val, vmin, vmax)
+                body += f"<td style='text-align:center;{style};padding:12px 6px'><span style='font-weight:700;font-size:1rem'>{f1_val:.4f}</span></td>"
+        body += "</tr>\n"
+    body += "</tbody>"
+    
+    return f"<table class='pivot-table' style='font-size:0.9rem; margin-bottom: 30px;'>{header}{body}</table>"
+
+
 # ─── HTML Üretici ─────────────────────────────────────────────────────────────
 
 def generate_html(run_no: int) -> str:
     eng_path    = os.path.join(RESULTS_DIR, f"{run_no}-english_analysis.csv")
     tur_path    = os.path.join(RESULTS_DIR, f"{run_no}-turkish_analysis.csv")
     final_path  = os.path.join(RESULTS_DIR, f"{run_no}-final_comparison_results.csv")
+    abl_path    = os.path.join(RESULTS_DIR, "ablation_study_results.csv")
     train_eng   = os.path.join(RESULTS_DIR, f"{run_no}-english_train.csv")
     test_eng    = os.path.join(RESULTS_DIR, f"{run_no}-english_test.csv")
     train_tur   = os.path.join(RESULTS_DIR, f"{run_no}-turkish_train.csv")
@@ -218,8 +265,27 @@ def generate_html(run_no: int) -> str:
     has_final = os.path.exists(final_path)
     if has_final:
         df_final = pd.read_csv(final_path, encoding="utf-8-sig")
-        pivot_eng_html = _final_pivot_html(df_final, "Ingilizce")
-        pivot_tur_html = _final_pivot_html(df_final, "Turkce")
+        pivot_eng_html = ""
+        pivot_tur_html = ""
+        
+        unique_islemler = df_final["On_Isleme"].unique() if "On_Isleme" in df_final.columns else ["Temel"]
+        on_isleme_map = {
+            "Sadece Temel": "Küçük Harfe Çevirme + Noktalama Temizleme + Tokenization",
+            "Sadece Stopword": "Küçük Harfe Çevirme + Noktalama Temizleme + Tokenization + Stop Word Removal",
+            "Sadece Stemming": "Küçük Harfe Çevirme + Noktalama Temizleme + Tokenization + Stemming",
+            "Hepsi (Stopword+Stem)": "Küçük Harfe Çevirme + Noktalama Temizleme + Tokenization + Stop Word Removal + Stemming"
+        }
+        
+        for on_isleme in unique_islemler:
+            genis_isim = on_isleme_map.get(on_isleme, on_isleme)
+            pivot_eng_html += f"<h3 style='color:#a5b4fc; font-weight:600; text-align:center; margin-top:5px; margin-bottom:12px; font-size:1.05rem;'>🧪 Ön İşleme: {genis_isim}</h3>"
+            pivot_eng_html += _final_pivot_html(df_final, "Ingilizce", on_isleme)
+            pivot_eng_html += "<div style='height:28px'></div>"
+
+            pivot_tur_html += f"<h3 style='color:#67e8f9; font-weight:600; text-align:center; margin-top:5px; margin-bottom:12px; font-size:1.05rem;'>🧪 Ön İşleme: {genis_isim}</h3>"
+            pivot_tur_html += _final_pivot_html(df_final, "Turkce", on_isleme)
+            pivot_tur_html += "<div style='height:28px'></div>"
+
         flat_html      = _final_flat_html(df_final)
 
         def _get_stats(df, lang=None):
@@ -244,12 +310,74 @@ def generate_html(run_no: int) -> str:
     split_eng = _split_stats_html(train_eng, test_eng)
     split_tur = _split_stats_html(train_tur, test_tur)
 
+    # Ablation Study / Derin Öğrenme Tablolarını Ayırma
+    dl_path = os.path.join(RESULTS_DIR, "dl_comparison_results.csv")
+    has_dl = os.path.exists(dl_path)
+    abl_html = ""
+    
+    if has_dl:
+        try:
+            df_dl = pd.read_csv(dl_path, encoding="utf-8-sig")
+            unique_islemler_dl = df_dl["On_Isleme"].unique() if "On_Isleme" in df_dl.columns else ["Temel"]
+            
+            on_isleme_map_dl = {
+                "Sadece Temel": "Küçük Harfe Çevirme + Noktalama Temizleme + Tokenization",
+                "Sadece Stopword": "Küçük Harfe Çevirme + Noktalama Temizleme + Tokenization + Stop Word Removal",
+                "Sadece Stemming": "Küçük Harfe Çevirme + Noktalama Temizleme + Tokenization + Stemming",
+                "Hepsi (Stopword+Stem)": "Küçük Harfe Çevirme + Noktalama Temizleme + Tokenization + Stop Word Removal + Stemming"
+            }
+            
+            dl_algos = ["TextCNN", "LSTM"]
+            
+            dl_eng_html = ""
+            dl_tur_html = ""
+            
+            for on_isleme in unique_islemler_dl:
+                genis_isim_dl = on_isleme_map_dl.get(on_isleme, on_isleme)
+                
+                dl_eng_html += f"<h3 style='color:#a5b4fc; font-weight:600; text-align:center; margin-top:5px; margin-bottom:12px; font-size:1.05rem;'>🧠 {genis_isim_dl}</h3>"
+                dl_eng_html += _final_pivot_html(df_dl, "Ingilizce", on_isleme, algos=dl_algos)
+                dl_eng_html += "<div style='height:28px'></div>"
+
+                dl_tur_html += f"<h3 style='color:#67e8f9; font-weight:600; text-align:center; margin-top:5px; margin-bottom:12px; font-size:1.05rem;'>🧠 {genis_isim_dl}</h3>"
+                dl_tur_html += _final_pivot_html(df_dl, "Turkce", on_isleme, algos=dl_algos)
+                dl_tur_html += "<div style='height:28px'></div>"
+
+            abl_html = f"""
+            <div class="lang-toggle" style="justify-content:center;margin-bottom:24px">
+              <button class="lang-btn active" onclick="switchLangDl('dl-all',this)">🌍 Tum Veriler</button>
+              <button class="lang-btn"        onclick="switchLangDl('dl-eng',this)">🇬🇧 Ingilizce</button>
+              <button class="lang-btn"        onclick="switchLangDl('dl-tur',this)">🇹🇷 Turkce</button>
+            </div>
+            
+            <div id="lang-dl-all" class="lang-panel active">
+              <p style="color:#a5b4fc;font-size:0.95rem;margin-bottom:10px;font-weight:700;text-align:center;border-bottom:1px solid #2d3148;padding-bottom:8px;">🇬🇧 İNGİLİZCE DERİN ÖĞRENME SONUÇLARI</p>
+              <div class="table-wrap" style="margin-bottom:30px">{dl_eng_html}</div>
+              
+              <p style="color:#67e8f9;font-size:0.95rem;margin-bottom:10px;font-weight:700;text-align:center;border-bottom:1px solid #2d3148;padding-bottom:8px;">🇹🇷 TÜRKÇE DERİN ÖĞRENME SONUÇLARI</p>
+              <div class="table-wrap">{dl_tur_html}</div>
+            </div>
+            <div id="lang-dl-eng" class="lang-panel">
+              <p style="color:#a5b4fc;font-size:0.95rem;margin-bottom:10px;font-weight:700;text-align:center;border-bottom:1px solid #2d3148;padding-bottom:8px;">🇬🇧 İNGİLİZCE DERİN ÖĞRENME SONUÇLARI</p>
+              <div class="table-wrap">{dl_eng_html}</div>
+            </div>
+            <div id="lang-dl-tur" class="lang-panel">
+              <p style="color:#67e8f9;font-size:0.95rem;margin-bottom:10px;font-weight:700;text-align:center;border-bottom:1px solid #2d3148;padding-bottom:8px;">🇹🇷 TÜRKÇE DERİN ÖĞRENME SONUÇLARI</p>
+              <div class="table-wrap">{dl_tur_html}</div>
+            </div>
+            """
+
+        except Exception as e:
+            abl_html = f"<p style='color:#f87171;text-align:center'>dl_comparison_results.csv okunamadi: {e}</p>"
+    else:
+        abl_html = "<p style='color:#64748b;text-align:center;padding:40px'>dl_comparison_results.csv bulunamadi. Once 'python experiment_dl.py' calistirin.</p>"
+
     html = f"""<!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Gini &amp; DFS Analizi – #{run_no}</title>
+<title>Metin Ön İşleme ve Algoritmalar – #{run_no}</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
   *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
@@ -332,18 +460,18 @@ def generate_html(run_no: int) -> str:
 <body>
 
 <header>
-  <h1>📊 Gini &amp; DFS + ML Siniflandirma Analizi</h1>
-  <p>Calistirma #{run_no} &nbsp;·&nbsp; Vocabulary: [500, 300, 100, 50, 30, 10] &nbsp;·&nbsp; SVM · MNB · Random Forest</p>
+  <h1>📊 Metin Ön İşleme Teknikleri ve Algoritmalar Analizi</h1>
+  <p>Calistirma #{run_no}</p>
 </header>
 
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('final',this)">📊 Final Karsilastirma</button>
-  <button class="tab-btn"        onclick="switchTab('eng',  this)">🇬🇧 Ingilizce SMS</button>
-  <button class="tab-btn"        onclick="switchTab('tur',  this)">🇹🇷 Turkce SMS</button>
-  <button class="tab-btn"        onclick="switchTab('ds',   this)">🗂 Veri Seti</button>
+  <button class="tab-btn active" onclick="switchTab('final',this)">📊 Makine Öğrenmesi Tabloları</button>
+  <button class="tab-btn"        onclick="switchTab('abl',  this)">🧪 Derin Öğrenme Tabloları</button>
+  <button class="tab-btn"        onclick="switchTab('eng',  this)">Ingilizce SMS</button>
+  <button class="tab-btn"        onclick="switchTab('tur',  this)">Turkce SMS</button>
+  <button class="tab-btn"        onclick="switchTab('ds',   this)">Veri Seti</button>
 </div>
 
-<!-- ══ FINAL KARŞILAŞTIRMA ══════════════════════════════════════════════════ -->
 <div id="panel-final" class="panel active">
 
   <div class="stats-bar" id="final-stats"
@@ -357,13 +485,11 @@ def generate_html(run_no: int) -> str:
     <div class="stat-card"><div class="label">Algoritmalar</div><div class="value">SVM · MNB · RF</div></div>
   </div>
 
-  <!-- Alt sekme: Pivot / Flat -->
   <div class="sub-tabs">
     <button class="sub-btn active" onclick="switchSub('pivot',this)">🌡 Isı Haritası (Pivot)</button>
     <button class="sub-btn"       onclick="switchSub('flat', this)">📋 Tüm Satırlar</button>
   </div>
 
-  <!-- Pivot görünümü -->
   <div id="sub-pivot" class="sub-panel active">
     <div class="legend">
       <span>Düsük F1</span>
@@ -390,7 +516,6 @@ def generate_html(run_no: int) -> str:
     </div>
   </div>
 
-  <!-- Flat tablo -->
   <div id="sub-flat" class="sub-panel">
     <div class="search-box">
       <input type="text" id="search-flat" placeholder="Algoritma / Yontem / Dil ara..." oninput="filterFlat(this.value)">
@@ -398,6 +523,7 @@ def generate_html(run_no: int) -> str:
     <div class="table-wrap">
       <table id="table-flat">
         <thead><tr>
+          <th style="text-align:center">Ön Isilème</th>
           <th style="text-align:center">Dil</th>
           <th style="text-align:center">Kelime<br>Sayisi</th>
           <th style="text-align:center">Yontem</th>
@@ -413,7 +539,18 @@ def generate_html(run_no: int) -> str:
   </div>
 </div>
 
-<!-- ══ İNGİLİZCE ════════════════════════════════════════════════════════════ -->
+<div id="panel-abl" class="panel">
+  <p class="section-title" style="text-align:center;margin-top:0;margin-bottom:20px;">Ön İşleme ve Derin Öğrenme F1-Macro Karşılaştırması</p>
+  <div class="legend" style="justify-content:center;margin-bottom:24px">
+      <span>Düşük F1</span>
+      <span class="legend-grad"></span>
+      <span>Yüksek F1</span>
+  </div>
+  <div style="max-width:900px; margin:0 auto; padding-bottom:40px;">
+    {abl_html}
+  </div>
+</div>
+
 <div id="panel-eng" class="panel">
   <div class="stats-bar">
     <div class="stat-card"><div class="label">Analiz Edilen Kelime</div><div class="value">{len(df_eng)}</div></div>
@@ -437,7 +574,6 @@ def generate_html(run_no: int) -> str:
   </div>
 </div>
 
-<!-- ══ TÜRKÇE ════════════════════════════════════════════════════════════════ -->
 <div id="panel-tur" class="panel">
   <div class="stats-bar">
     <div class="stat-card"><div class="label">Analiz Edilen Kelime</div><div class="value">{len(df_tur)}</div></div>
@@ -461,7 +597,6 @@ def generate_html(run_no: int) -> str:
   </div>
 </div>
 
-<!-- ══ VERİ SETİ ═════════════════════════════════════════════════════════════ -->
 <div id="panel-ds" class="panel">
   <p class="section-title">🇬🇧 Ingilizce – Train / Test (%70 / %30)</p>
   <div class="table-wrap" style="margin-bottom:24px">
@@ -516,6 +651,13 @@ function switchLang(id,key,btn){{
   btn.classList.add('active');
   updateFinalStats(key);
 }}
+function switchLangDl(id,btn){{
+  const container = btn.closest('.panel');
+  container.querySelectorAll('.lang-panel').forEach(p=>p.classList.remove('active'));
+  container.querySelectorAll('.lang-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('lang-'+id).classList.add('active');
+  btn.classList.add('active');
+}}
 function filterTable(lang,q){{
   q=q.toLowerCase().trim();
   document.querySelectorAll('#table-'+lang+' tbody tr').forEach(row=>{{
@@ -541,7 +683,7 @@ function filterFlat(q){{
 def main():
     run_no = _latest_run_number()
     if run_no is None:
-        print("results/ klasorunde hic CSV bulunamadi. Once 'python main.py' calistirin.")
+        print("results/ klasorunde hic CSV bulunamadi. Once 'python experiment_dl.py' calistirin.")
         return
 
     print(f"Calistirma #{run_no} sonuclari yukleniyor...")

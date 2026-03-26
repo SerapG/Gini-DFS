@@ -109,68 +109,62 @@ def save(matrix: pd.DataFrame, output_path: str) -> None:
 
 # ─── DİL PİPELINE'LARI ────────────────────────────────────────────────────────
 
-def run_english(run_no: int) -> list:
+def run_english(run_no: int, scenario_name: str, rm_stop: bool, ap_stem: bool) -> list:
     """
-    Ingilizce SMS pipeline:
-      Yukle → Skorla → CSV kaydet → Split+Train/Test CSV → Vocab döngüsü
-    Tüm deneme satirlarini döndürür.
+    Ingilizce SMS pipeline: Yükle → Skorla → Split+Train/Test → Vocab döngüsü
     """
     print(f"\n{'─' * 62}")
-    print("  [Ingilizce SMS] okunuyor...")
-    df = load_english()
+    print(f"  [Ingilizce SMS] okunuyor... (Senaryo: {scenario_name})")
+    df = load_english(remove_stopwords=rm_stop, apply_stemming=ap_stem)
     print(f"  → Toplam mesaj      : {len(df)}")
-    print(f"  → Sinif dagilimi    :\n{df['label'].value_counts().to_string()}")
 
-    # Skor matrisi (500 kelime skorlanir, CSV'ye kaydedilir)
+    # Skor matrisi
     matrix      = build_score_matrix(df, "Ingilizce SMS")
     output_path = os.path.join(RESULTS_DIR, f"{run_no}-english_analysis.csv")
-    display_comparison(matrix, "Ingilizce SMS")
     save(matrix, output_path)
 
-    # Train/Test bölme ve CSV kayit (1 kez)
+    # Train/Test bölme ve CSV kayit
     train_path, test_path = prepare_data(df, "english", run_no)
 
     # Vocab boyutlari üzerinden döngü
     all_rows = []
     for vocab_size in VOCAB_SIZES:
-        print(f"\n  >>> Analiz ediliyor: {vocab_size} kelime... (Ingilizce)")
         rows = run_vocab_experiment(
             train_path, test_path, matrix, vocab_size, "Ingilizce"
         )
-        all_rows.extend(rows)
+        for r in rows:
+            r["On_Isleme"] = scenario_name
+            all_rows.append(r)
 
     return all_rows
 
 
-def run_turkish(run_no: int) -> list:
+def run_turkish(run_no: int, scenario_name: str, rm_stop: bool, ap_stem: bool) -> list:
     """
-    Türkçe SMS pipeline:
-      Yukle → Skorla → CSV kaydet → Split+Train/Test CSV → Vocab döngüsü
-    Tüm deneme satirlarini döndürür.
+    Türkçe SMS pipeline: Yükle → Skorla → Split+Train/Test → Vocab döngüsü
     """
     print(f"\n{'─' * 62}")
-    print("  [Turkce SMS] os.walk ile taraniyor...")
-    df = load_turkish()
+    print(f"  [Turkce SMS] okunuyor... (Senaryo: {scenario_name})")
+    df = load_turkish(remove_stopwords=rm_stop, apply_stemming=ap_stem)
     print(f"  → Toplam mesaj      : {len(df)}")
-    print(f"  → Sinif dagilimi    :\n{df['label'].value_counts().to_string()}")
 
     # Skor matrisi
     matrix      = build_score_matrix(df, "Turkce SMS")
     output_path = os.path.join(RESULTS_DIR, f"{run_no}-turkish_analysis.csv")
-    display_comparison(matrix, "Turkce SMS")
     save(matrix, output_path)
 
-    # Train/Test bölme ve CSV kayit (1 kez)
+    # Train/Test bölme ve CSV kayit
     train_path, test_path = prepare_data(df, "turkish", run_no)
 
     # Vocab boyutlari üzerinden döngü
     all_rows = []
     for vocab_size in VOCAB_SIZES:
-        print(f"\n  >>> Analiz ediliyor: {vocab_size} kelime... (Turkce)")
         rows = run_vocab_experiment(
             train_path, test_path, matrix, vocab_size, "Turkce"
         )
-        all_rows.extend(rows)
+        for r in rows:
+            r["On_Isleme"] = scenario_name
+            all_rows.append(r)
 
     return all_rows
 
@@ -185,13 +179,22 @@ def main():
     print(f"  Calistirma #{run_no}  |  Vocab boyutlari: {VOCAB_SIZES}")
     print("=" * 62)
 
-    # Her iki dil için pipeline'lari çalistir, satirlari topla
-    all_rows  = run_english(run_no)
-    all_rows += run_turkish(run_no)
+    # 4 Farklı Ön İşleme Senaryosu
+    scenarios = [
+        ("Sadece Temel", False, False),
+        ("Sadece Stopword", True, False),
+        ("Sadece Stemming", False, True),
+        ("Hepsi (Stopword+Stem)", True, True)
+    ]
+
+    all_rows = []
+    for sc_name, rm_stop, ap_stem in scenarios:
+        all_rows += run_english(run_no, sc_name, rm_stop, ap_stem)
+        all_rows += run_turkish(run_no, sc_name, rm_stop, ap_stem)
 
     # ── Kümülatif final tablosunu oluştur ve kaydet ───────────────────────────
     final_df = pd.DataFrame(all_rows, columns=[
-        "Dil", "Kelime_Sayisi", "Yontem", "Algoritma",
+        "On_Isleme", "Dil", "Kelime_Sayisi", "Yontem", "Algoritma",
         "Accuracy", "Precision", "Recall", "F1_Score",
     ])
 
@@ -204,7 +207,7 @@ def main():
     print("=" * 62)
     pivot = (
         final_df
-        .groupby(["Dil", "Kelime_Sayisi", "Yontem", "Algoritma"])["F1_Score"]
+        .groupby(["On_Isleme", "Dil", "Kelime_Sayisi", "Yontem", "Algoritma"])["F1_Score"]
         .first()
         .unstack(["Yontem", "Algoritma"])
     )
