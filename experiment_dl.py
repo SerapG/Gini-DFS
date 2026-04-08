@@ -29,6 +29,13 @@ except ImportError:
     TORCH_AVAILABLE = False
     warnings.warn("PyTorch bulunamadı! Lütfen yükleyin: pip install torch")
 
+try:
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    warnings.warn("Transformers kütüphanesi bulunamadı! Lütfen Hugging Face transformers yükleyin (pip install transformers).")
+
 RESULTS_DIR = "results"
 TEST_SIZE = 0.30
 RANDOM_STATE = 42
@@ -186,6 +193,91 @@ def run_dl_pipeline(df: pd.DataFrame, scenario_name: str, lang_label: str) -> li
             })
             print(f"      ✔ LSTM           | {method_name:<4} | Vocab={vocab_size:<3} | F1={f1:.4f}")
             
+    # --- HuggingFace BERT (Pre-trained) --------------------------------------
+    if TRANSFORMERS_AVAILABLE:
+        try:
+            bert_model_name = "dbmdz/distilbert-base-turkish-cased" if "Turkce" in lang_label else "distilbert-base-uncased"
+            algo_name = "DistilBERT"
+            
+            # TextCNN / LSTM icin vector haline getirilmis X_train_raw'un icindeki token listelerini yaziya cevir
+            X_train_texts = [" ".join(tokens) for tokens in X_train_raw]
+            X_test_texts = [" ".join(tokens) for tokens in X_test_raw]
+            
+            # HuggingFace sessizlik ayari (warning spam'ini engellemek adina)
+            import logging
+            logging.getLogger("transformers").setLevel(logging.ERROR)
+            
+            tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
+            model = AutoModelForSequenceClassification.from_pretrained(bert_model_name, num_labels=2)
+            
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model.to(device)
+            
+            train_encodings = tokenizer(X_train_texts, truncation=True, padding=True, max_length=MAX_LEN)
+            test_encodings = tokenizer(X_test_texts, truncation=True, padding=True, max_length=MAX_LEN)
+            
+            class BERTDataset(torch.utils.data.Dataset):
+                def __init__(self, encodings, labels):
+                    self.encodings = encodings
+                    self.labels = labels
+                def __getitem__(self, idx):
+                    item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+                    item['labels'] = torch.tensor(self.labels[idx], dtype=torch.long)
+                    return item
+                def __len__(self):
+                    return len(self.labels)
+
+            train_dataset = BERTDataset(train_encodings, y_tr.tolist())
+            test_dataset = BERTDataset(test_encodings, y_te.tolist())
+            
+            loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=2e-5)
+            
+            model.train()
+            print(f"\n      * {algo_name} ({bert_model_name}) egitiliyor (Epochs={EPOCHS}, MaxLen={MAX_LEN})...")
+            for _ in range(EPOCHS):
+                for batch in loader:
+                    optimizer.zero_grad()
+                    input_ids = batch['input_ids'].to(device)
+                    attention_mask = batch['attention_mask'].to(device)
+                    labels = batch['labels'].to(device)
+                    
+                    outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+                    loss = outputs.loss
+                    loss.backward()
+                    optimizer.step()
+                    
+            model.eval()
+            all_preds = []
+            test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE)
+            with torch.no_grad():
+                for batch in test_loader:
+                    input_ids = batch['input_ids'].to(device)
+                    attention_mask = batch['attention_mask'].to(device)
+                    outputs = model(input_ids, attention_mask=attention_mask)
+                    preds = torch.argmax(outputs.logits, dim=-1)
+                    all_preds.extend(preds.cpu().numpy())
+                    
+            acc_bert = accuracy_score(y_te, all_preds)
+            prec_bert = precision_score(y_te, all_preds, average="weighted", zero_division=0)
+            rec_bert = recall_score(y_te, all_preds, average="weighted", zero_division=0)
+            f1_bert = f1_score(y_te, all_preds, average="weighted", zero_division=0)
+            
+            all_rows.append({
+                "On_Isleme": scenario_name,
+                "Dil": lang_label,
+                "Kelime_Sayisi": "Full (Pre-trained)",
+                "Yontem": "Full Text",
+                "Algoritma": algo_name,
+                "Accuracy": round(acc_bert, 4),
+                "Precision": round(prec_bert, 4),
+                "Recall": round(rec_bert, 4),
+                "F1_Score": round(f1_bert, 4),
+            })
+            print(f"      ✔ {algo_name:<14} | Full Text | Vocab=Full | F1={f1_bert:.4f}\n")
+        except Exception as e:
+            print(f"      ✕ {algo_name} hatasi: {e}\n")
+
     return all_rows
 
 def main():
